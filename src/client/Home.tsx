@@ -10,11 +10,11 @@ const DEMO: GameState = (() => {
     '0,-2': { kind: 'ring', owner: 0, id: 0 },
     '2,1': { kind: 'ring', owner: 0, id: 1 },
     '-3,1': { kind: 'ring', owner: 0, id: 2 },
-    '-1,-2': { kind: 'pillar', owner: 0, id: 3 },
+    '-1,-2': { kind: 'ring', owner: 0, id: 3 },
     '1,-3': { kind: 'ring', owner: 1, id: 4 },
     '-2,3': { kind: 'ring', owner: 1, id: 5 },
     '3,-1': { kind: 'ring', owner: 1, id: 6 },
-    '0,2': { kind: 'pillar', owner: 1, id: 7 },
+    '0,2': { kind: 'ring', owner: 1, id: 7 },
   };
   const markers: [string, 0 | 1][] = [
     ['-1,0', 0],
@@ -62,7 +62,7 @@ export function Home({ go }: { go: (path: string) => void }) {
           <Wordmark />
         </h1>
         <p className="lede">
-          Стратегия на двоих: кольца, фишки и столбы. Создайте игру и отправьте другу ссылку — он откроет её и
+          Стратегия на двоих: кольца и фишки. Создайте игру и отправьте другу ссылку — он откроет её и
           сразу окажется за доской. Без регистрации и имён.
         </p>
 

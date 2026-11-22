@@ -3,10 +3,10 @@
 export type Player = 0 | 1;
 export type Key = string;
 
-export const RADIUS = 4;
+export const RADIUS = 5;
 export const RINGS_PER_PLAYER = 4;
-export const ROW_LENGTH = 4;
-export const PILLARS_TO_WIN = 3;
+export const ROW_LENGTH = 5;
+export const RINGS_TO_WIN = 3;
 
 export const DIRS = [
   [1, 0],
@@ -18,13 +18,10 @@ export const DIRS = [
 ] as const;
 const AXES = DIRS.slice(0, 3);
 
-export type Cell =
-  | { kind: 'ring'; owner: Player; id: number }
-  | { kind: 'marker'; owner: Player }
-  | { kind: 'pillar'; owner: Player; id: number };
+export type Cell = { kind: 'ring'; owner: Player; id: number } | { kind: 'marker'; owner: Player };
 
 export type Phase = 'placing' | 'moving' | 'claimRow' | 'claimRing' | 'finished';
-export type EndReason = 'pillars' | 'blocked' | 'resign';
+export type EndReason = 'rings' | 'blocked' | 'resign';
 
 export interface GameState {
   cells: Record<Key, Cell>;
@@ -66,8 +63,14 @@ export const parseKey = (k: Key): [number, number] => {
   return [q, r];
 };
 
-export const onBoard = (q: number, r: number): boolean =>
-  Math.abs(q) <= RADIUS && Math.abs(r) <= RADIUS && Math.abs(q + r) <= RADIUS;
+/** The field is a hexagon of radius 5 with its six corner points cut off (85 points). */
+export const onBoard = (q: number, r: number): boolean => {
+  const a = Math.abs(q);
+  const b = Math.abs(r);
+  const c = Math.abs(q + r);
+  const tight = (a === RADIUS ? 1 : 0) + (b === RADIUS ? 1 : 0) + (c === RADIUS ? 1 : 0);
+  return a <= RADIUS && b <= RADIUS && c <= RADIUS && tight < 2;
+};
 
 export const ALL_KEYS: Key[] = (() => {
   const keys: Key[] = [];
@@ -103,7 +106,7 @@ export function newGame(first: Player = 0): GameState {
 /**
  * Where a ring can go: along a straight line over empty points; it may jump one
  * unbroken group of markers and must then stop on the first empty point behind it.
- * Rings and pillars block the line.
+ * Rings block the line.
  */
 export function ringMoves(cells: Record<Key, Cell>, from: Key): RingMove[] {
   const [q0, r0] = parseKey(from);
@@ -243,20 +246,22 @@ export function applyAction(prev: GameState, player: Player, action: Action): Re
       if (!Array.isArray(action.cells) || !action.cells.every(isKey)) return fail('Неверный ряд');
       const wanted = [...action.cells].sort().join('|');
       const row = findRows(s.cells, player).find((r) => [...r].sort().join('|') === wanted);
-      if (!row) return fail('Это не ряд из четырёх ваших фишек');
+      if (!row) return fail('Это не ряд из пяти ваших фишек');
       for (const k of row) delete s.cells[k];
       s.phase = 'claimRing';
       return { ok: true, state: s };
     }
 
     case 'claimRing': {
-      if (s.phase !== 'claimRing') return fail('Сейчас нельзя ставить столб');
+      if (s.phase !== 'claimRing') return fail('Сейчас нельзя снимать кольцо');
       if (!isKey(action.at)) return fail('Неверный ход');
       const ring = s.cells[action.at];
       if (!ring || ring.kind !== 'ring' || ring.owner !== player) return fail('Выберите своё кольцо');
-      s.cells[action.at] = { kind: 'pillar', owner: player, id: ring.id };
+      delete s.cells[action.at];
+      // The move trace must not point at a point that no longer holds the ring.
+      if (s.last?.to === action.at) s.last = null;
       s.score[player] += 1;
-      if (s.score[player] >= PILLARS_TO_WIN) finish(s, player, 'pillars');
+      if (s.score[player] >= RINGS_TO_WIN) finish(s, player, 'rings');
       else settle(s);
       return { ok: true, state: s };
     }

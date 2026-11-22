@@ -371,19 +371,19 @@ label {
   }
 }
 
-.pillars {
+.rings {
   display: flex;
   gap: 0.3rem;
 }
 
-.pillars i {
+.rings i {
   width: 0.95rem;
   height: 0.95rem;
   border-radius: 50%;
   border: 1.5px solid var(--line);
 }
 
-.pillars i.got {
+.rings i.got {
   background: currentColor;
   border-color: var(--piece-edge);
 }
@@ -607,25 +607,25 @@ label {
   animation: offer 0.9s ease-in-out infinite alternate;
 }
 
+/* A removed ring drifts away so it is easy to notice. */
+.ring.gone {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: ring-gone 0.8s ease-out forwards;
+  pointer-events: none;
+}
+
+@keyframes ring-gone {
+  to {
+    opacity: 0;
+    transform: scale(1.55);
+  }
+}
+
 @keyframes offer {
   to {
     stroke-width: 16;
   }
-}
-
-.pillar-body {
-  fill: currentColor;
-  stroke: var(--piece-edge);
-  stroke-width: 2.5;
-  transform-box: fill-box;
-  transform-origin: center;
-  animation: pop 0.3s ease-out;
-}
-
-.pillar-eye {
-  fill: var(--surface);
-  stroke: var(--piece-edge);
-  stroke-width: 2.5;
 }
 
 .target {
@@ -657,12 +657,8 @@ label {
   opacity: 0.55;
 }
 
-.hits circle {
+.hits {
   fill: transparent;
-}
-
-.hits .can {
-  cursor: pointer;
 }
 
 /* ---------- Overlays ---------- */
@@ -814,7 +810,7 @@ label {
     gap: 0.5rem;
   }
 
-  .pillars {
+  .rings {
     grid-column: 2;
   }
 

@@ -1,14 +1,17 @@
 import { useEffect, useRef, useState, type FormEvent, type RefObject } from 'react';
 import {
-  PILLARS_TO_WIN,
   RINGS_PER_PLAYER,
+  RINGS_TO_WIN,
   other,
   type Action,
+  type GameState,
   type Player,
 } from '../shared/game.ts';
 import { MAX_CHAT, type ChatMessage, type RoomView, type SeatView } from '../shared/protocol.ts';
 import { Board } from './Board.tsx';
+import { cuesFor } from './cues.ts';
 import { RulesList, Wordmark } from './rules.tsx';
+import { play, useMuted } from './sound.ts';
 import { useRoom } from './useRoom.ts';
 
 // Players are anonymous; they are told apart by the colour of their pieces.
@@ -32,19 +35,19 @@ function statusText(view: RoomView): string {
       if (mine) return 'Ваш ход: нажмите на своё кольцо, затем на точку, куда его передвинуть';
       return watching ? `Ходят ${side.toLowerCase()}` : 'Ходит соперник';
     case 'claimRow':
-      if (mine) return 'Четыре в ряд! Нажмите на ряд, чтобы снять фишки';
+      if (mine) return 'Пять в ряд! Нажмите на ряд, чтобы снять фишки';
       return watching ? `${side} снимают ряд` : 'Соперник снимает ряд';
     case 'claimRing':
-      if (mine) return 'Выберите кольцо, которое станет столбом';
-      return watching ? `${side} ставят столб` : 'Соперник ставит столб';
+      if (mine) return 'Ряд снят. Выберите своё кольцо, которое уйдёт с поля';
+      return watching ? `${side} снимают кольцо` : 'Соперник снимает кольцо';
   }
 }
 
 function outcome(view: RoomView): { title: string; reason: string } {
   const { game, you } = view;
   const winner = game.winner;
-  let reason = 'Ходов не осталось — считаем столбы.';
-  if (game.endReason === 'pillars') reason = 'Поставлены три столба.';
+  let reason = 'Ходов не осталось — считаем снятые кольца.';
+  if (game.endReason === 'rings') reason = 'Собраны три ряда.';
   if (game.endReason === 'resign' && winner !== 'draw' && winner !== null) {
     reason = you === null ? `${SIDES[other(winner)]} сдались.` : winner === you ? 'Соперник сдался.' : 'Вы сдались.';
   }
@@ -72,8 +75,8 @@ function PlayerRow({ seat, player, view }: { seat: SeatView | null; player: Play
           {!seat ? 'место свободно' : seat.online ? 'в сети' : 'не в сети'}
         </span>
       </div>
-      <div className="pillars" aria-label={`Столбов: ${game.score[player]} из ${PILLARS_TO_WIN}`}>
-        {Array.from({ length: PILLARS_TO_WIN }, (_, i) => (
+      <div className="rings" aria-label={`Снято рядов: ${game.score[player]} из ${RINGS_TO_WIN}`}>
+        {Array.from({ length: RINGS_TO_WIN }, (_, i) => (
           <i key={i} className={i < game.score[player] ? 'got' : undefined} />
         ))}
       </div>
@@ -192,6 +195,7 @@ export function Room({ id, go }: { id: string; go: (path: string) => void }) {
   // tab is in the background, and show it as a toast when the chat is scrolled out of view.
   const onChat = (m: ChatMessage) => {
     if (m.from === seat.current) return;
+    play({ name: 'chat' });
     if (document.hidden) return setUnread((n) => n + 1);
     const box = chatBox.current?.getBoundingClientRect();
     const visible = !!box && box.top < innerHeight - 40 && box.bottom > 0;
@@ -223,7 +227,10 @@ export function Room({ id, go }: { id: string; go: (path: string) => void }) {
     const before = seen.current;
     seen.current = now;
     if (!before) return;
-    if (!before.seated && now.seated) setNotice('Соперник в игре — начинаем');
+    if (!before.seated && now.seated) {
+      setNotice('Соперник в игре — начинаем');
+      play({ name: 'start' });
+    }
     else if (before.online && !now.online) setNotice('Соперник не в сети');
     else if (before.seated && !before.online && now.online) setNotice('Соперник снова в сети');
   }, [view, you, opp]);
@@ -250,6 +257,17 @@ export function Room({ id, go }: { id: string; go: (path: string) => void }) {
   }, [myTurn, unread]);
 
   useEffect(() => setConfirmResign(false), [view?.game.ply]);
+
+  // Every change on the board is heard, whoever made it. The position seen first — after
+  // loading the page or reconnecting — is silent.
+  const [muted, setMuted] = useMuted();
+  const game = view?.game;
+  const heard = useRef<GameState | null>(null);
+  useEffect(() => {
+    if (!game) return;
+    play(...cuesFor(heard.current, game, you));
+    heard.current = game;
+  }, [game, you]);
 
   const home = (e: React.MouseEvent) => {
     e.preventDefault();
@@ -280,7 +298,6 @@ export function Room({ id, go }: { id: string; go: (path: string) => void }) {
     );
   }
 
-  const { game } = view;
   const act = (action: Action) => send({ t: 'action', action });
   const result = finished ? outcome(view) : null;
   const iAsked = you !== null && view.rematch[you];
@@ -328,7 +345,7 @@ export function Room({ id, go }: { id: string; go: (path: string) => void }) {
       </header>
 
       <main className={`stage${freeSeat ? ' idle' : ''}`}>
-        <Board game={game} you={you} active={myTurn && link === 'open'} onAction={act} />
+        <Board game={view.game} you={you} active={myTurn && link === 'open'} onAction={act} />
       </main>
 
       {you !== null && (bothSeated || chat.length > 0) ? (
@@ -346,6 +363,16 @@ export function Room({ id, go }: { id: string; go: (path: string) => void }) {
       <footer className="side side-bottom">
         <button className="btn quiet" onClick={() => rules.current?.showModal()}>
           Правила
+        </button>
+        <button
+          className="btn quiet"
+          aria-pressed={!muted}
+          onClick={() => {
+            setMuted(!muted);
+            if (muted) play({ name: 'select' });
+          }}
+        >
+          {muted ? 'Звук: выкл' : 'Звук: вкл'}
         </button>
         {you !== null &&
           bothSeated &&
