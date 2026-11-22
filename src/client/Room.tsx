@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type FormEvent, type RefObject } from 'react';
 import {
   PILLARS_TO_WIN,
   RINGS_PER_PLAYER,
@@ -6,7 +6,7 @@ import {
   type Action,
   type Player,
 } from '../shared/game.ts';
-import type { RoomView, SeatView } from '../shared/protocol.ts';
+import { MAX_CHAT, type ChatMessage, type RoomView, type SeatView } from '../shared/protocol.ts';
 import { Board } from './Board.tsx';
 import { RulesList, Wordmark } from './rules.tsx';
 import { useRoom } from './useRoom.ts';
@@ -122,13 +122,88 @@ function Invite({ url }: { url: string }) {
   );
 }
 
+function Chat({
+  messages,
+  you,
+  online,
+  onSend,
+  root,
+}: {
+  messages: ChatMessage[];
+  you: Player;
+  online: boolean;
+  onSend: (text: string) => boolean;
+  root: RefObject<HTMLElement | null>;
+}) {
+  const [text, setText] = useState('');
+  const log = useRef<HTMLOListElement>(null);
+
+  // Keep the newest message in view.
+  useEffect(() => {
+    const el = log.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [messages.length]);
+
+  const submit = (e: FormEvent) => {
+    e.preventDefault();
+    const line = text.trim();
+    if (line && onSend(line)) setText('');
+  };
+
+  return (
+    <section className="side chat" ref={root} aria-label="Чат с соперником">
+      <h2>Чат</h2>
+      <ol className="chat-log" ref={log} aria-live="polite">
+        {messages.length === 0 && (
+          <li className="chat-empty">Напишите сопернику. Переписку видите только вы двое.</li>
+        )}
+        {messages.map((m) => (
+          <li key={m.id} className={`msg p${m.from}${m.from === you ? ' mine' : ''}`}>
+            <span className="visually-hidden">{m.from === you ? 'Вы: ' : 'Соперник: '}</span>
+            <span className="msg-text">{m.text}</span>
+          </li>
+        ))}
+      </ol>
+      <form className="chat-form" onSubmit={submit}>
+        <input
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          maxLength={MAX_CHAT}
+          placeholder="Сообщение"
+          aria-label="Сообщение сопернику"
+          autoComplete="off"
+          enterKeyHint="send"
+        />
+        <button className="btn" disabled={!online || !text.trim()}>
+          Отправить
+        </button>
+      </form>
+    </section>
+  );
+}
+
 export function Room({ id, go }: { id: string; go: (path: string) => void }) {
-  const { view, link, missing, error, send } = useRoom(id);
   const [notice, setNotice] = useState<string | null>(null);
+  const [unread, setUnread] = useState(0);
+  const seat = useRef<Player | null>(null);
+  const chatBox = useRef<HTMLElement>(null);
+
+  // A message from the opponent must not go unnoticed: count it in the tab title when the
+  // tab is in the background, and show it as a toast when the chat is scrolled out of view.
+  const onChat = (m: ChatMessage) => {
+    if (m.from === seat.current) return;
+    if (document.hidden) return setUnread((n) => n + 1);
+    const box = chatBox.current?.getBoundingClientRect();
+    const visible = !!box && box.top < innerHeight - 40 && box.bottom > 0;
+    if (!visible) setNotice(`Соперник: ${m.text.length > 70 ? `${m.text.slice(0, 70)}…` : m.text}`);
+  };
+
+  const { view, chat, link, missing, error, send } = useRoom(id, onChat);
   const [confirmResign, setConfirmResign] = useState(false);
   const rules = useRef<HTMLDialogElement>(null);
 
   const you = view?.you ?? null;
+  seat.current = you;
   const opp = view && you !== null ? view.seats[other(you)] : null;
   const bothSeated = !!view && view.seats[0] !== null && view.seats[1] !== null;
   const freeSeat = !!view && !bothSeated;
@@ -160,11 +235,19 @@ export function Room({ id, go }: { id: string; go: (path: string) => void }) {
   }, [notice]);
 
   useEffect(() => {
-    document.title = myTurn ? 'Ваш ход — Kolo' : 'Kolo';
+    const seen = () => {
+      if (!document.hidden) setUnread(0);
+    };
+    document.addEventListener('visibilitychange', seen);
+    return () => document.removeEventListener('visibilitychange', seen);
+  }, []);
+
+  useEffect(() => {
+    document.title = `${unread ? `(${unread}) ` : ''}${myTurn ? 'Ваш ход — Kolo' : 'Kolo'}`;
     return () => {
       document.title = 'Kolo';
     };
-  }, [myTurn]);
+  }, [myTurn, unread]);
 
   useEffect(() => setConfirmResign(false), [view?.game.ply]);
 
@@ -247,6 +330,18 @@ export function Room({ id, go }: { id: string; go: (path: string) => void }) {
       <main className={`stage${freeSeat ? ' idle' : ''}`}>
         <Board game={game} you={you} active={myTurn && link === 'open'} onAction={act} />
       </main>
+
+      {you !== null && (bothSeated || chat.length > 0) ? (
+        <Chat
+          messages={chat}
+          you={you}
+          online={link === 'open'}
+          onSend={(text) => send({ t: 'chat', text })}
+          root={chatBox}
+        />
+      ) : (
+        <div className="side chat" />
+      )}
 
       <footer className="side side-bottom">
         <button className="btn quiet" onClick={() => rules.current?.showModal()}>

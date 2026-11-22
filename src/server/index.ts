@@ -5,12 +5,22 @@ import { fileURLToPath } from 'node:url';
 import sirv from 'sirv';
 import { WebSocketServer, type WebSocket } from 'ws';
 import { applyAction, newGame, other, type GameState, type Player } from '../shared/game.ts';
-import type { ClientMsg, RoomView, ServerMsg } from '../shared/protocol.ts';
+import {
+  cleanChat,
+  MAX_CHAT_HISTORY,
+  type ChatMessage,
+  type ClientMsg,
+  type RoomView,
+  type ServerMsg,
+} from '../shared/protocol.ts';
 
 const PORT = Number(process.env.PORT ?? 8787);
 const MAX_ROOMS = 5000;
 const ROOM_TTL_MS = 24 * 60 * 60 * 1000;
 const ID_ALPHABET = 'abcdefghjkmnpqrstuvwxyz23456789';
+// Chat flood guard: at most CHAT_BURST messages per CHAT_WINDOW_MS from one connection.
+const CHAT_BURST = 8;
+const CHAT_WINDOW_MS = 10_000;
 
 interface Seat {
   token: string;
@@ -22,6 +32,8 @@ interface Room {
   game: GameState;
   rematch: [boolean, boolean];
   round: number;
+  chat: ChatMessage[];
+  chatSeq: number;
   sockets: Set<WebSocket>;
   touched: number;
 }
@@ -30,6 +42,7 @@ interface Conn {
   room: Room | null;
   token: string;
   alive: boolean;
+  chatTimes: number[];
 }
 
 const rooms = new Map<string, Room>();
@@ -97,7 +110,9 @@ function handle(ws: WebSocket, c: Conn, msg: ClientMsg) {
     c.token = msg.token;
     c.room = room;
     room.sockets.add(ws);
-    return broadcast(room);
+    broadcast(room);
+    if (seatOf(room, c.token) !== null) send(ws, { t: 'history', messages: room.chat });
+    return;
   }
 
   const room = c.room;
@@ -110,7 +125,8 @@ function handle(ws: WebSocket, c: Conn, msg: ClientMsg) {
       const free: Player | null = room.seats[0] === null ? 0 : room.seats[1] === null ? 1 : null;
       if (free === null) return; // both seats taken: this visitor just watches
       room.seats[free] = { token: c.token };
-      return broadcast(room);
+      broadcast(room);
+      return send(ws, { t: 'history', messages: room.chat });
     }
 
     case 'action': {
@@ -121,6 +137,28 @@ function handle(ws: WebSocket, c: Conn, msg: ClientMsg) {
       room.game = res.state;
       if (room.game.phase === 'finished') room.round += 1;
       return broadcast(room);
+    }
+
+    case 'chat': {
+      // The chat is between the two players; spectators neither write nor read it.
+      if (seat === null) return;
+      const text = cleanChat(msg.text);
+      if (!text) return;
+      const now = Date.now();
+      c.chatTimes = c.chatTimes.filter((t) => now - t < CHAT_WINDOW_MS);
+      if (c.chatTimes.length >= CHAT_BURST) {
+        return send(ws, { t: 'error', message: 'Слишком много сообщений подряд. Подождите несколько секунд.' });
+      }
+      c.chatTimes.push(now);
+      const message: ChatMessage = { id: ++room.chatSeq, from: seat, text, at: now };
+      room.chat.push(message);
+      if (room.chat.length > MAX_CHAT_HISTORY) room.chat.splice(0, room.chat.length - MAX_CHAT_HISTORY);
+      room.touched = now;
+      for (const peer of room.sockets) {
+        const pc = conns.get(peer);
+        if (pc && seatOf(room, pc.token) !== null) send(peer, { t: 'chat', message });
+      }
+      return;
     }
 
     case 'rematch': {
@@ -183,6 +221,8 @@ const server = createServer(async (req, res) => {
         game: newGame(0),
         rematch: [false, false],
         round: 0,
+        chat: [],
+        chatSeq: 0,
         sockets: new Set(),
         touched: Date.now(),
       };
@@ -206,7 +246,7 @@ const server = createServer(async (req, res) => {
 const wss = new WebSocketServer({ server, path: '/ws', maxPayload: 4096 });
 
 wss.on('connection', (ws) => {
-  const c: Conn = { room: null, token: '', alive: true };
+  const c: Conn = { room: null, token: '', alive: true, chatTimes: [] };
   conns.set(ws, c);
 
   ws.on('pong', () => {
