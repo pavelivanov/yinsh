@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent, type RefObject } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import {
   RINGS_PER_PLAYER,
   RINGS_TO_WIN,
@@ -17,10 +17,25 @@ import { useRoom } from './useRoom.ts';
 // Players are anonymous; they are told apart by the colour of their pieces.
 const SIDES = ['Янтарные', 'Фиолетовые'] as const;
 
+/** The chat opens by itself only where it fits beside the board. */
+const ROOMY = '(min-aspect-ratio: 8/5) and (min-width: 1100px)';
+
+function outcome(view: RoomView): string {
+  const { game, you } = view;
+  const winner = game.winner;
+  let reason = 'Ходов не осталось.';
+  if (game.endReason === 'rings') reason = 'Три кольца сняты.';
+  if (game.endReason === 'resign' && winner !== 'draw' && winner !== null) {
+    reason = you === null ? `${SIDES[other(winner)]} сдались.` : winner === you ? 'Соперник сдался.' : 'Вы сдались.';
+  }
+  if (winner === 'draw' || winner === null) return `${reason} Ничья`;
+  if (you === null) return `${reason} Победили ${SIDES[winner].toLowerCase()}`;
+  return `${reason} ${winner === you ? 'Вы победили' : 'Вы проиграли'}`;
+}
+
 function statusText(view: RoomView): string {
   const { game, seats, you } = view;
   if (!seats[0] || !seats[1]) return 'Ждём соперника';
-  if (game.phase === 'finished') return 'Игра окончена';
 
   const mine = you === game.turn;
   const watching = you === null;
@@ -40,42 +55,31 @@ function statusText(view: RoomView): string {
     case 'claimRing':
       if (mine) return 'Ряд снят. Выберите своё кольцо, которое уйдёт с поля';
       return watching ? `${side} снимают кольцо` : 'Соперник снимает кольцо';
+    case 'finished':
+      return outcome(view);
   }
 }
 
-function outcome(view: RoomView): { title: string; reason: string } {
-  const { game, you } = view;
-  const winner = game.winner;
-  let reason = 'Ходов не осталось — считаем снятые кольца.';
-  if (game.endReason === 'rings') reason = 'Собраны три ряда.';
-  if (game.endReason === 'resign' && winner !== 'draw' && winner !== null) {
-    reason = you === null ? `${SIDES[other(winner)]} сдались.` : winner === you ? 'Соперник сдался.' : 'Вы сдались.';
-  }
-  if (winner === 'draw' || winner === null) return { title: 'Ничья', reason };
-  if (you === null) return { title: `Победили ${SIDES[winner].toLowerCase()}`, reason };
-  return { title: winner === you ? 'Вы победили' : 'Вы проиграли', reason };
-}
-
-function PlayerRow({ seat, player, view }: { seat: SeatView | null; player: Player; view: RoomView }) {
+function PlayerPill({ seat, player, view }: { seat: SeatView | null; player: Player; view: RoomView }) {
   const { game, you } = view;
   const live = game.phase !== 'finished' && view.seats[0] !== null && view.seats[1] !== null;
   const turn = live && game.turn === player;
   return (
     <li className={`player p${player}${turn ? ' turn' : ''}${seat ? '' : ' empty'}`}>
       <svg className="token" viewBox="-14 -14 28 28" aria-hidden="true">
-        <circle r={9} />
+        <circle r={9.5} />
       </svg>
       <div className="who">
         <span className="name">
           {SIDES[player]}
-          {seat && you === player && <span className="you">это вы</span>}
+          {seat && you === player && <span className="you">вы</span>}
         </span>
         <span className={`presence${seat?.online ? ' on' : ''}`}>
           <i aria-hidden="true" />
           {!seat ? 'место свободно' : seat.online ? 'в сети' : 'не в сети'}
         </span>
       </div>
-      <div className="rings" aria-label={`Снято рядов: ${game.score[player]} из ${RINGS_TO_WIN}`}>
+      <div className="rings" aria-label={`Снято колец: ${game.score[player]} из ${RINGS_TO_WIN}`}>
         {Array.from({ length: RINGS_TO_WIN }, (_, i) => (
           <i key={i} className={i < game.score[player] ? 'got' : undefined} />
         ))}
@@ -101,7 +105,7 @@ function Invite({ url }: { url: string }) {
   };
 
   return (
-    <section className="card invite">
+    <section className="float invite">
       <h2>Позовите соперника</h2>
       <p>Отправьте другу эту ссылку. Когда он её откроет, вы увидите это здесь, и игра начнётся.</p>
       <input
@@ -129,14 +133,19 @@ function Chat({
   messages,
   you,
   online,
+  open,
+  fresh,
+  onToggle,
   onSend,
-  root,
 }: {
   messages: ChatMessage[];
   you: Player;
   online: boolean;
+  open: boolean;
+  /** Messages from the opponent that arrived while the chat was closed. */
+  fresh: number;
+  onToggle: (open: boolean) => void;
   onSend: (text: string) => boolean;
-  root: RefObject<HTMLElement | null>;
 }) {
   const [text, setText] = useState('');
   const log = useRef<HTMLOListElement>(null);
@@ -145,7 +154,7 @@ function Chat({
   useEffect(() => {
     const el = log.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [messages.length]);
+  }, [messages.length, open]);
 
   const submit = (e: FormEvent) => {
     e.preventDefault();
@@ -153,9 +162,19 @@ function Chat({
     if (line && onSend(line)) setText('');
   };
 
+  if (!open) {
+    const last = messages.at(-1);
+    return (
+      <button className="float chat-toggle" onClick={() => onToggle(true)} aria-expanded="false">
+        Чат
+        {last && <span className={`chat-peek${fresh ? ' fresh' : ''}`}>{last.text}</span>}
+        {fresh > 0 && <span className="visually-hidden">Новых сообщений: {fresh}</span>}
+      </button>
+    );
+  }
+
   return (
-    <section className="side chat" ref={root} aria-label="Чат с соперником">
-      <h2>Чат</h2>
+    <section className="float chat" aria-label="Чат с соперником">
       <ol className="chat-log" ref={log} aria-live="polite">
         {messages.length === 0 && (
           <li className="chat-empty">Напишите сопернику. Переписку видите только вы двое.</li>
@@ -177,29 +196,62 @@ function Chat({
           autoComplete="off"
           enterKeyHint="send"
         />
-        <button className="btn" disabled={!online || !text.trim()}>
-          Отправить
+        <button className="round send" disabled={!online || !text.trim()} aria-label="Отправить">
+          <svg viewBox="0 0 16 16" aria-hidden="true">
+            <path d="M8 13V3.5M3.75 7.5 8 3.25l4.25 4.25" />
+          </svg>
+        </button>
+        <button type="button" className="round" onClick={() => onToggle(false)} aria-label="Свернуть чат">
+          <svg viewBox="0 0 16 16" aria-hidden="true">
+            <path d="m5 5 6 6m0-6-6 6" />
+          </svg>
         </button>
       </form>
     </section>
   );
 }
 
+function SoundToggle() {
+  const [muted, setMuted] = useMuted();
+  return (
+    <button
+      className="link icon"
+      aria-pressed={!muted}
+      aria-label="Звук"
+      title={muted ? 'Звук выключен' : 'Звук включён'}
+      onClick={() => {
+        setMuted(!muted);
+        if (muted) play({ name: 'select' });
+      }}
+    >
+      <svg viewBox="0 0 20 20" aria-hidden="true">
+        <path className="solid" d="M3 7.75h2.75L10 4.25v11.5l-4.25-3.5H3z" />
+        {muted ? (
+          <path d="m13 7.75 4.5 4.5m0-4.5-4.5 4.5" />
+        ) : (
+          <path d="M13 7a4.2 4.2 0 0 1 0 6m2.2-8.2a7.4 7.4 0 0 1 0 10.4" />
+        )}
+      </svg>
+    </button>
+  );
+}
+
 export function Room({ id, go }: { id: string; go: (path: string) => void }) {
   const [notice, setNotice] = useState<string | null>(null);
   const [unread, setUnread] = useState(0);
+  const [chatOpen, setChatOpen] = useState(() => matchMedia(ROOMY).matches);
+  const [fresh, setFresh] = useState(0);
   const seat = useRef<Player | null>(null);
-  const chatBox = useRef<HTMLElement>(null);
+  const chatShown = useRef(chatOpen);
+  chatShown.current = chatOpen;
 
-  // A message from the opponent must not go unnoticed: count it in the tab title when the
-  // tab is in the background, and show it as a toast when the chat is scrolled out of view.
+  // A message from the opponent must not go unnoticed: it is heard, counted in the tab title
+  // when the tab is in the background, and marked on the chat button while the chat is closed.
   const onChat = (m: ChatMessage) => {
     if (m.from === seat.current) return;
     play({ name: 'chat' });
-    if (document.hidden) return setUnread((n) => n + 1);
-    const box = chatBox.current?.getBoundingClientRect();
-    const visible = !!box && box.top < innerHeight - 40 && box.bottom > 0;
-    if (!visible) setNotice(`Соперник: ${m.text.length > 70 ? `${m.text.slice(0, 70)}…` : m.text}`);
+    if (document.hidden) setUnread((n) => n + 1);
+    if (!chatShown.current) setFresh((n) => n + 1);
   };
 
   const { view, chat, link, missing, error, send } = useRoom(id, onChat);
@@ -230,8 +282,7 @@ export function Room({ id, go }: { id: string; go: (path: string) => void }) {
     if (!before.seated && now.seated) {
       setNotice('Соперник в игре — начинаем');
       play({ name: 'start' });
-    }
-    else if (before.online && !now.online) setNotice('Соперник не в сети');
+    } else if (before.online && !now.online) setNotice('Соперник не в сети');
     else if (before.seated && !before.online && now.online) setNotice('Соперник снова в сети');
   }, [view, you, opp]);
 
@@ -260,7 +311,6 @@ export function Room({ id, go }: { id: string; go: (path: string) => void }) {
 
   // Every change on the board is heard, whoever made it. The position seen first — after
   // loading the page or reconnecting — is silent.
-  const [muted, setMuted] = useMuted();
   const game = view?.game;
   const heard = useRef<GameState | null>(null);
   useEffect(() => {
@@ -299,99 +349,93 @@ export function Room({ id, go }: { id: string; go: (path: string) => void }) {
   }
 
   const act = (action: Action) => send({ t: 'action', action });
-  const result = finished ? outcome(view) : null;
   const iAsked = you !== null && view.rematch[you];
   const oppAsked = you !== null && view.rematch[other(you)];
+  // The dot in the status shows whose move it is, or who won.
+  const { winner } = view.game;
+  const dot = !bothSeated ? null : finished ? (winner === 'draw' ? null : winner) : view.game.turn;
+  // Your own side sits nearest to the edge of the screen, like your side of a table.
+  const order: Player[] = you === 0 ? [1, 0] : [0, 1];
+
+  const toggleChat = (open: boolean) => {
+    setChatOpen(open);
+    setFresh(0);
+  };
 
   return (
-    <div className="room">
-      <header className="side side-top">
+    <div className={`room${freeSeat ? ' idle' : ''}`}>
+      <header className="top">
         <a href="/" onClick={home} className="brand">
           <Wordmark small />
         </a>
 
-        <ul className="players">
-          <PlayerRow seat={view.seats[0]} player={0} view={view} />
-          <PlayerRow seat={view.seats[1]} player={1} view={view} />
-        </ul>
-
-        {!finished && (
-          <p className={`status${myTurn ? ' mine' : ''}`} aria-live="polite">
-            {statusText(view)}
-          </p>
-        )}
-
-        {you !== null && freeSeat && <Invite url={location.href} />}
-
-        {you === null && !freeSeat && <p className="note">Оба места заняты. Вы смотрите игру как зритель.</p>}
-
-        {result && (
-          <section className="card result" aria-live="polite">
-            <h2>{result.title}</h2>
-            <p>{result.reason}</p>
-            {you !== null &&
+        <div className="top-mid">
+          <div className={`float status${myTurn || finished ? ' strong' : ''}`} aria-live="polite">
+            {dot !== null && <i className={`dot p${dot}`} aria-hidden="true" />}
+            <span>{statusText(view)}</span>
+            {finished &&
+              you !== null &&
               (iAsked ? (
-                <p className="note">Ждём, пока соперник согласится на новую партию.</p>
+                <span className="waiting">Ждём ответа соперника</span>
               ) : (
-                <>
-                  {oppAsked && <p className="note">Соперник предлагает сыграть ещё раз.</p>}
-                  <button className="btn" onClick={() => send({ t: 'rematch' })}>
-                    {oppAsked ? 'Принять и сыграть ещё раз' : 'Сыграть ещё раз'}
-                  </button>
-                </>
+                <button className="again" onClick={() => send({ t: 'rematch' })}>
+                  {oppAsked ? 'Принять реванш' : 'Сыграть ещё раз'}
+                </button>
               ))}
-          </section>
-        )}
+          </div>
+        </div>
+
+        <nav className="actions">
+          <SoundToggle />
+          <button className="link" onClick={() => rules.current?.showModal()}>
+            Правила
+          </button>
+          {you !== null &&
+            bothSeated &&
+            !finished &&
+            (confirmResign ? (
+              <>
+                <button className="link danger" onClick={() => act({ type: 'resign' })}>
+                  Да, сдаться
+                </button>
+                <button className="link" onClick={() => setConfirmResign(false)}>
+                  Нет
+                </button>
+              </>
+            ) : (
+              <button className="link soft" onClick={() => setConfirmResign(true)}>
+                Сдаться
+              </button>
+            ))}
+        </nav>
       </header>
 
-      <main className={`stage${freeSeat ? ' idle' : ''}`}>
+      <main className="stage">
         <Board game={view.game} you={you} active={myTurn && link === 'open'} onAction={act} />
       </main>
 
-      {you !== null && (bothSeated || chat.length > 0) ? (
-        <Chat
-          messages={chat}
-          you={you}
-          online={link === 'open'}
-          onSend={(text) => send({ t: 'chat', text })}
-          root={chatBox}
-        />
-      ) : (
-        <div className="side chat" />
-      )}
+      {you !== null && freeSeat && <Invite url={location.href} />}
 
-      <footer className="side side-bottom">
-        <button className="btn quiet" onClick={() => rules.current?.showModal()}>
-          Правила
-        </button>
-        <button
-          className="btn quiet"
-          aria-pressed={!muted}
-          onClick={() => {
-            setMuted(!muted);
-            if (muted) play({ name: 'select' });
-          }}
-        >
-          {muted ? 'Звук: выкл' : 'Звук: вкл'}
-        </button>
-        {you !== null &&
-          bothSeated &&
-          !finished &&
-          (confirmResign ? (
-            <>
-              <button className="btn danger" onClick={() => act({ type: 'resign' })}>
-                Да, сдаться
-              </button>
-              <button className="btn quiet" onClick={() => setConfirmResign(false)}>
-                Играть дальше
-              </button>
-            </>
-          ) : (
-            <button className="btn quiet" onClick={() => setConfirmResign(true)}>
-              Сдаться
-            </button>
-          ))}
-      </footer>
+      <ul className="players">
+        {order.map((p) => (
+          <PlayerPill key={p} seat={view.seats[p]} player={p} view={view} />
+        ))}
+      </ul>
+
+      <div className="corner">
+        {you !== null && (bothSeated || chat.length > 0) && (
+          <Chat
+            messages={chat}
+            you={you}
+            online={link === 'open'}
+            open={chatOpen}
+            fresh={fresh}
+            onToggle={toggleChat}
+            onSend={(text) => send({ t: 'chat', text })}
+          />
+        )}
+        {you === null && !freeSeat && <p className="float hint">Оба места заняты — вы зритель</p>}
+      </div>
 
       <dialog ref={rules} className="rules-dialog" onClick={(e) => e.target === rules.current && rules.current.close()}>
         <div className="rules-body">

@@ -143,8 +143,7 @@ export function Board({ game, you, active, onAction }: Props) {
       if (ownRing(k)) {
         setSelected(selected === k ? null : k);
         play({ name: 'select' });
-      }
-      else if (selected && targets.has(k)) onAction({ type: 'move', from: selected, to: k });
+      } else if (selected && targets.has(k)) onAction({ type: 'move', from: selected, to: k });
       else setSelected(null);
     } else if (phase === 'claimRow') {
       const row = pickRow(rows, k);
@@ -248,15 +247,11 @@ export function Board({ game, you, active, onAction }: Props) {
 
       {rings.map((c) => {
         const p = at(c.k);
-        const mine = c.owner === you;
-        const cls = [
-          'ring',
-          `p${c.owner}`,
-          selected === c.k ? 'selected' : '',
-          active && mine && phase === 'claimRing' ? 'offer' : '',
-        ].join(' ');
+        const offered = active && c.owner === you && phase === 'claimRing';
+        const cls = ['ring', `p${c.owner}`, selected === c.k ? 'selected' : ''].join(' ');
         return (
           <g key={c.id} className={cls} style={{ transform: `translate(${p.x}px, ${p.y}px)` }}>
+            {offered && <circle className="halo" r={34} />}
             <circle className="ring-edge" r={19.5} />
             <circle className="ring-body" r={19.5} />
           </g>
